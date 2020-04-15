@@ -1,4 +1,4 @@
-# Welcome to my IE 360 Page!
+# Welcome to my IE 360 Progress Journal!
 
 ### Umut Mete Saka
 
