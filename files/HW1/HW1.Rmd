@@ -1,0 +1,386 @@
+---
+title: "An Analysis of Indicators affecting Consumer Price Index of Turkey"
+author: "Umut Mete Saka"
+output:
+  html_document: default
+  word_document: default
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Introduction
+
+The Consumer Price Index (CPI) is a measure of the average change over time in the prices paid by urban consumers for a market basket of consumer goods and services. It is calculated and officially announced monthly by Turkish Statistical Institute (TURKSTAT). Consumer price index is used to calculate the inflation over the currency and here in this homework, it is Turkish Lira(TRY).
+
+Economic theories claim that there is a negative correlation between CPI and unemployment rate. In contrary there is a positive correlation between CPI and government spending, claims the theories. Also specifically for Turkey, it has been seen that increase in exchange rates of foreign currencies (mainly EUR and USD) causes inflation in Turkey. Thus, it has a positive correlation between CPI. 
+
+Another less common case in economic studies is Stagflation which happens when both CPI and unemployment rises due to secondary indicators.
+
+This homework is to visualize and analyze the monthly data of Government Spending, Unemployment Rate, Exchange Rates and CPI of Turkey between Jan 2010 and Dec 2019 and interpret the effects of the selected indicators over CPI.
+
+The data used in this study is provided from Turkish Republic Central Bank Electronic Data Delivery System from the [link](https://evds2.tcmb.gov.tr/)
+
+## First Steps
+
+#### Loading Packages
+
+I used several packages in my study therefore I started with downloading them. 
+These packages will be needed to import, analyze and visualize my data.
+
+
+
+```{r,message=FALSE }
+library(data.table)
+library(zoo)
+library(xts)
+library(readxl)
+library(ggplot2)
+library(stats)
+
+```
+
+#### Importing data and converting into data.table
+
+```{r}
+data_unemp<-data.table(read_xlsx("unemp_mon.xlsx"))
+data_exc_rates<-data.table(read_xlsx("usd_eur_mon.xlsx"))
+data_cpi<-data.table(read_xlsx("CPI_mon.xlsx"))
+data_bud_sp<-data.table(read_xlsx("bud_spe_mon.xlsx"))
+```
+
+#### Creating the Currency Basket
+
+Since the most common foreign currencies used in Turkey are EUR and USD, I wanted to use them both by a common method, called currency basket. Here I create currency basket rate as 0.5 EUR + 0.5 USD
+
+```{r}
+data_exc_basket<-data_exc_rates[,list(Currency_Basket_Rate = sum(`TP DK USD A YTL`, `TP DK EUR A YTL`)/2)
+                                ,by=list(Tarih)]
+```
+
+
+#### Merging the data into one table
+
+```{r}
+temp<-merge(data_exc_basket,data_unemp)
+temp<-merge(temp,data_bud_sp)
+all_data<-merge(temp,data_cpi)
+
+```
+
+#### Setting the column names of my table and checking it
+
+```{r}
+setnames(all_data,names(all_data),c("Date","Currency_Basket_Rate","Unemployment_Rate","Government_Spending","Consumer_Price_Index"))
+
+head(all_data)
+```
+
+#### Converting Government Spending Data from Thousands of TRY into billions of TRY 
+
+```{r}
+all_data$Government_Spending<-all_data$Government_Spending/1e6
+```
+
+
+#### Converting the data into extended time series
+
+    To have the time index proper I had to add day as 01 to the Date objects. 
+
+```{r}
+
+all_data$Date <- as.Date(paste(all_data$Date,"01",sep="-"))
+data_xts<- as.xts(all_data)
+
+```
+
+
+## Analysis 
+
+### Meeting with the data
+
+#### Plotting the data 
+
+My data is in time series class now and I can start my analysis. First I will plot the data in order to visualize its pattern which will help me to detect time influence on the variables.
+
+```{r , echo=FALSE}
+par(mfrow=c(2,1))
+plot(data_xts$Currency_Basket_Rate)
+plot(data_xts$Unemployment_Rate)
+plot(data_xts$Government_Spending )
+plot(data_xts$Consumer_Price_Index )
+
+```
+
+
+#### Interpreting the plots 
+
+It's seen that Government Spending has a upwards trend with seasonal-like fluctuations, Currency Rate and CPI have upwards linear-like trend over time. Now I will calculate descriptive statistics of the data. This shows all four variables have increasing time impact since January 2010.
+
+As next, I will calculate descriptive statistics of the data to see overall picture regardless of the time.
+
+#### Summarizing my data and analyzing its descriptive statistics
+
+Showing min, max, mean, median and quantiles of the data set by summary function.
+
+```{r,echo=FALSE}
+summary(data_xts)
+```
+
+Showing standart deviation of the data 
+
+```{r}
+sqrt(data.frame(var(data_xts$Currency_Basket_Rate),
+var(data_xts$Unemployment_Rate),
+var(data_xts$Government_Spending),
+var(data_xts$Consumer_Price_Index),row.names = "St. Deviation"))
+```
+
+To illustrate the dependence between variables, I calculate covariance and correlation coefficients between CPI and the selected variables.
+
+```{r,echo=FALSE}
+var(data_xts,data_xts$Consumer_Price_Index)
+```
+Showing correlation coefficients of the data with CPI.
+```{r,echo=FALSE}
+cor(data_xts,data_xts$Consumer_Price_Index)
+```
+
+
+
+#### Creating Scatter plots 
+
+```{r,echo=FALSE}
+
+ggplot(data_xts,aes(Consumer_Price_Index,Currency_Basket_Rate ,color = index(data_xts))) + geom_point()
+ggplot(data_xts,aes(Consumer_Price_Index,Unemployment_Rate ,color = index(data_xts))) + geom_point()
+ggplot(data_xts,aes(Consumer_Price_Index,Government_Spending ,color = index(data_xts))) + geom_point()
+
+```
+
+#### Plotting Auto-Correlation functions of the data
+
+```{r,echo=FALSE}
+par(mfrow=c(2,1))
+
+acf(data_xts$Currency_Basket_Rate)
+acf(data_xts$Unemployment_Rate)
+acf(data_xts$Government_Spending)
+acf(data_xts$Consumer_Price_Index)
+
+
+```
+
+
+#### Interpreting the plots and the statistics
+
+CPI has high correlation between Government spending and Currency rate. This can be seen in the scatter plots too. This what I expected in the beginning of the study. 
+
+The auto-correlation function shows me that both data are highly auto-correlated with k up to 15-lags in Unemployment and 20 in others.. 
+
+But the unemployment rate shows a behavior which I did not expect. The correlation was positive which I expected it to be negative. Therefore I check the scatter plot. Between years 2010-12 Unemployment and CPI seems to have negative correlation, then slightly positive between 2012-15 than negative between 2015-17 and highly positive between 2018-2019. I will check these in further analysis part.
+
+
+### Further Analysis over the data
+
+After analysis of the original set, I will make some specific analysis to have better results. My first approach it to smooth the data on a 12-month base. The second approach is to take the logarithm of the variables, which is most often applied to economic data sets. The third approach is to de-trend data sets by differencing.
+
+#### Plots of the data with moving average with k = 12
+
+The data has fluctuations over time so I smoothed the data by taking 12 month moving average and plotted.
+
+```{r,echo=FALSE}
+par(mfrow=c(2,1))
+plot(rollmean(data_xts$Currency_Basket_Rate,12))
+plot(rollmean(data_xts$Unemployment_Rate,12))
+plot(rollmean(data_xts$Government_Spending,12))
+plot(rollmean(data_xts$Consumer_Price_Index,12))
+
+```
+
+We see that impact of the smoothing cancel the seaonality effect but trend remains persistent.
+
+#### Taking log of the data 
+
+To visualize the major changes in more linear terms, I plotted log transformation of the data.
+
+```{r}
+log_data_xts <- log(data_xts)
+```
+
+```{r,echo=FALSE}
+par(mfrow=c(2,1))
+plot(log_data_xts$Currency_Basket_Rate)
+plot(log_data_xts$Unemployment_Rate)
+plot(log_data_xts$Government_Spending)
+plot(log_data_xts$Consumer_Price_Index)
+
+```
+
+#### Calculating the difference of the data
+
+Detrending the series with taking differences, both for original and log-transformed series, summarizing their statistics and plotting
+
+```{r }
+Dif_data_xts <- na.omit(diff(data_xts))
+Dif_log_data_xts <- na.omit(diff(log_data_xts))
+
+summary(Dif_data_xts)
+summary(Dif_log_data_xts)
+
+```
+
+```{r,echo=FALSE}
+
+par(mfrow=c(3,1))
+
+plot(Dif_data_xts$Currency_Basket_Rate,main="Dif_Currency")
+plot(Dif_log_data_xts$Currency_Basket_Rate,main="Dif_Log_Currency")
+plot(Dif_data_xts$Unemployment_Rate,main="Dif_Unemployment")
+plot(Dif_log_data_xts$Unemployment_Rate,main="Dif_Log_Unemployment")
+plot(Dif_data_xts$Government_Spending,main="Dif_GovSpending")
+plot(Dif_log_data_xts$Currency_Basket_Rate,main="Dif_Log_GovSpending")
+par(mfrow = c(2,1))
+plot(Dif_data_xts$Consumer_Price_Index,main="Dif_CPI")
+plot(Dif_log_data_xts$Consumer_Price_Index,main="Dif_Log_CPI")
+
+```
+
+Fluctuations are more appaerent in Difference of log_data. 
+
+*In all plots we see that differencing eliminates the trend*
+
+#### Calculating correlation between differenced sets
+
+```{r,echo=FALSE}
+
+cor(Dif_data_xts,Dif_data_xts$Consumer_Price_Index)
+
+```
+
+
+#### Calculating lagged data 
+
+It can be seen that difference in currency has a correlation with difference in CPI. We can check that whether the increase in currency rate affect CPI after some time, by lagging the CPI data.
+
+```{r}
+lag_cor<-cor(na.omit(lag(Dif_data_xts$Consumer_Price_Index,0)),Dif_data_xts$Currency_Basket_Rate[1:119])
+
+for(i in 1:16){
+  
+  lag_cor<-c(lag_cor,cor(na.omit(lag(Dif_data_xts$Consumer_Price_Index,i)),Dif_data_xts$Currency_Basket_Rate[1:(119-i)]))
+}
+
+lag_cor
+
+```
+By considering 1 to 16 month length on CPI data, it can be seen that the correlation remains around 0.5 and increase for lagged data with a maximum increase in 15 month to 0.64. So it will not be wrong to say that an increase in the currency rate may increase the CPI in further months. 
+
+#### Auto-correlation functions of differenced sets
+
+Acf of the differenced sets of the main set
+
+```{r,echo=FALSE}
+
+par(mfrow = c(2,1))
+acf(Dif_data_xts$Currency_Basket_Rate)
+acf(Dif_data_xts$Unemployment_Rate)
+acf(Dif_data_xts$Government_Spending)
+acf(Dif_data_xts$Consumer_Price_Index)
+
+```
+
+Acf of the differenced sets of the log-transformed set
+
+```{r,echo=FALSE}
+par(mfrow = c(2,1))
+acf(Dif_log_data_xts$Currency_Basket_Rate)
+acf(Dif_log_data_xts$Unemployment_Rate)
+acf(Dif_log_data_xts$Government_Spending)
+acf(Dif_log_data_xts$Consumer_Price_Index)
+```
+
+#### Further analysis of Unemployment 
+
+The relation between unemployment data and CPI creates some inconsistency in my primary analysis. Therefore I will make further analysis of the data. 
+Firstly I will divide the data to years and calculate correlations between CPI.
+
+```{r}
+data_10 <- data_xts["2010"]
+data_11 <- data_xts["2011"]
+data_12 <- data_xts["2012"]
+data_13 <- data_xts["2013"]
+data_14 <- data_xts["2014"]
+data_15 <- data_xts["2015"]
+data_16 <- data_xts["2016"]
+data_17 <- data_xts["2017"]
+data_18 <- data_xts["2018"]
+data_19 <- data_xts["2019"]
+```
+
+
+```{r}
+#correlation between the data in 2010
+cor(data_10$Unemployment_Rate,data_10$Consumer_Price_Index)
+#correlation between the data in 2011
+cor(data_11$Unemployment_Rate,data_11$Consumer_Price_Index)
+#correlation between the data in 2012
+cor(data_12$Unemployment_Rate,data_12$Consumer_Price_Index)
+#correlation between the data in 2013
+cor(data_13$Unemployment_Rate,data_13$Consumer_Price_Index)
+#correlation between the data in 2014
+cor(data_14$Unemployment_Rate,data_14$Consumer_Price_Index)
+#correlation between the data in 2015
+cor(data_15$Unemployment_Rate,data_15$Consumer_Price_Index)
+#correlation between the data in 2016
+cor(data_16$Unemployment_Rate,data_16$Consumer_Price_Index)
+#correlation between the data in 2017
+cor(data_17$Unemployment_Rate,data_17$Consumer_Price_Index)
+#correlation between the data in 2018
+cor(data_18$Unemployment_Rate,data_18$Consumer_Price_Index)
+#correlation between the data in 2019
+cor(data_19$Unemployment_Rate,data_19$Consumer_Price_Index)
+```
+
+
+Also it is possible that the unemployment rate of a year, can affect the CPI of a further year so I check correlation of unemployment rate with CPI of following year.
+
+```{r}
+#correlation between the Unemployment data in 2010 and CPI data in 2011
+cor(data_10$Unemployment_Rate,data_11$Consumer_Price_Index)
+#correlation between the Unemployment data in 2011 and CPI data in 2012
+cor(data_11$Unemployment_Rate,data_12$Consumer_Price_Index)
+#correlation between the Unemployment data in 2012 and CPI data in 2013
+cor(data_12$Unemployment_Rate,data_13$Consumer_Price_Index)
+#correlation between the Unemployment data in 2013 and CPI data in 2014
+cor(data_13$Unemployment_Rate,data_14$Consumer_Price_Index)
+#correlation between the Unemployment data in 2014 and CPI data in 2015
+cor(data_14$Unemployment_Rate,data_15$Consumer_Price_Index)
+#correlation between the Unemployment data in 2015 and CPI data in 2016
+cor(data_15$Unemployment_Rate,data_16$Consumer_Price_Index)
+#correlation between the Unemployment data in 2016 and CPI data in 2017
+cor(data_16$Unemployment_Rate,data_17$Consumer_Price_Index)
+#correlation between the Unemployment data in 2017 and CPI data in 2018
+cor(data_17$Unemployment_Rate,data_18$Consumer_Price_Index)
+#correlation between the Unemployment data in 2018 and CPI data in 2019
+cor(data_18$Unemployment_Rate,data_19$Consumer_Price_Index)
+
+```
+
+## Conclusion
+
+Consumer Price Index of Turkey has a dependency over Currency rates. A difference in the currency affects both the current and the future CPI. 
+
+Even though the Government spending seems to have a high positive correlation with CPI, the difference happens in government spending seems to have no effect over CPI. 
+
+Unemployment rate has different effects on CPI. In years 2010,2011,2012,2013,2017 the unemployment rate and following years' CPIs have high negative correlation as we expected to have. In year 2015 there is nearly no correlation. And in years 2014,2016 and 2018 the unemployment rate and following years' CPIs have positive correlation. This may happen due to the stronger effect of Currency difference. But in 2018 the correlation is relatively high (0.78) and this can sign to a stagflation in Turkey. 
+
+
+## Appendix
+
+[https://www.bls.gov/cpi/](https://www.bls.gov/cpi/)
+
+[https://core.ac.uk/download/pdf/7142108.pdf](https://core.ac.uk/download/pdf/7142108.pdf)
+
+[Macroeconomics in Context, Goodwin N.,Nelson J.A.,Harris J.](https://www.taylorfrancis.com/books/9781315702735)
+
+[R documentation](https://www.rdocumentation.org/)
