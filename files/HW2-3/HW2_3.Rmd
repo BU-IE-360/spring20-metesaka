@@ -1,0 +1,396 @@
+---
+title: "Time Series Analysis of Electricity Consumption of Turkey"
+author: "Umut Mete Saka - 2018402228"
+output:
+  html_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Introduction
+
+Electricity is used widely for vast amount of purposes in daily life of households and also businesses in the World. Most production facilities uses electricity, nearly every household has an access to electricity in developing and developed countries. As a developing country, Turkey has met electricity over 100 years ago and it is reported that 100% of Turkish population has an electricity access in 2016[1].
+
+This study aims to understand the behavior of electricity consumption in Turkey in hourly, weekly and monthly time units from 01.01.2016 to 26.04.2020 and make forecasts for the following 24 hours. 
+
+The data used in this study is provided from EXIST (Energy Exchange Istanbul) which can be retrieved from [this link.](https://seffaflik.epias.com.tr/transparency/tuketim/gerceklesen-tuketim/gercek-zamanli-tuketim.xhtml) 
+
+## First Steps
+
+#### Loading Packages
+
+I used several packages in my study therefore I started with loading them. 
+These packages will be needed to analyze and visualize my data.
+
+```{r,message=FALSE }
+library(data.table)
+library(zoo)
+library(xts)
+library(ggplot2)
+library(stats)
+library(dplyr)
+library(forecast)
+```
+
+#### Importing data and converting into data.table and changing column names
+
+```{r}
+data_elec <- data.table(read.csv("data_electricity.csv"))
+names(data_elec) <- c("Date", "Time" , "Consumption_MWh")
+```
+
+Now we can display the structure of the data
+```{r, echo=FALSE }
+str(data_elec)
+```
+*Table 1 : Structure of the dataset*
+
+
+#### Manipulating data in order to start our analysis
+
+We need to make some manipulations to make our time series analysis. These are adding month, day, year, weekday and week colunms and converting Consumption data into numeric.
+```{r, include=FALSE }
+data_elec$Date <- as.character(data_elec$Date)
+data_elec[,c("day","month","year"):=tstrsplit(Date, "[.]")]
+data_elec$day <- as.integer(data_elec$day)
+data_elec$month <- as.integer(data_elec$month)
+data_elec$year <- as.integer(data_elec$year)
+data_elec[,"Day_of_the_week" := format(as.Date(data_elec$Date,format = "%d.%m.%Y"),format = "%A")]
+
+
+data_elec$Consumption_MWh <- as.character(data_elec$Consumption_MWh)
+temp1 <- c()
+for(i in 1:length(data_elec$Consumption_MWh)){
+  temp2 <- 1000*as.numeric(paste(unlist(strsplit(data_elec$Consumption_MWh[i],",")),collapse = ""))
+  temp1 <- c(temp1,temp2)
+}
+data_elec$Consumption_MWh <- temp1
+
+temp3 <- seq(0,0,length.out = length(data_elec$Consumption_MWh))
+data_elec[,"Week" := temp3]
+temp4 <- 1
+
+for(i in 1:length(data_elec$Consumption_MWh) ){
+  if(data_elec$month[i] == 1 & data_elec$Time[i] == "00:00" & data_elec$day[i] == 1){
+    temp4 <- 1
+  }
+  
+  if(data_elec$Day_of_the_week[i] == "Pazartesi" & data_elec$Time[i] == as.factor("00:00")){
+    temp4 <- temp4+1
+  }
+  data_elec$Week[i] <- temp4
+}
+
+```
+Now our data is ready:
+```{r,echo=FALSE}
+str(data_elec)
+```
+*Table 2 : Modified Structure of the dataset*
+
+Consequently we will create 3 new datasets from the hourly data. These will be the daily, weekly and monthly means of consumptions.
+
+```{r}
+data_elec_daily <-  data_elec[,list(daily_total=mean(Consumption_MWh)), by = list(year,month,day)]
+data_elec_monthly <- data_elec[,list(monthly_total=mean(Consumption_MWh)), by = list(year,month)]
+data_elec_weekly <-  data_elec[,list(weekly_total=mean(Consumption_MWh)), by = list(year,month,Week)]
+
+```
+
+## Analyses
+
+### Task1
+#### Creating time series for hourly, daily and weekly and monthly data
+
+Before doing the anaylses, we can see the behaviour the series. The hourly data enables us to have the shortest time duration analyses, and the seasonality can be detected for each time units, such as hourly,
+
+BEFORE DOİNG THE ANALYSES, WE CAN SEE THE BEHAVIOUR OF THE SERIES. THE
+HOURLY DATA ENABLES US TO HAVE THE SHORTEST TIME DURATION ANALYSES, AND
+THE SEASONALITY CAN BE DETECTED FOR EACH TIME UNITS, SUCH AS HOURLY,
+DAILY, WEEKLY AND MONTHLY DATA. THE SEASONALİTY BEHAVIOUR MAY CHANGE
+ACCORDING TO THE TIME UNIT.
+In order to analyse it, we will create time series of the data and plot it.
+
+```{r, echo= FALSE}
+hourly_ts <-  ts(data_elec$Consumption_MWh, start = c(2016,1),freq = 24*365)
+daily_ts <- ts(data_elec_daily$daily_total, start = c(2016,1), frequency = 365)
+weekly_ts <- ts(data_elec_weekly$weekly_total,start = c(2016,1), frequency = 52)
+monthly_ts <- ts(data_elec_monthly$monthly_total,start = c(2016,1), frequency = 12)
+```
+
+
+```{r, warning=FALSE , echo=FALSE}
+par(mfrow = c(2,2))
+plot(hourly_ts , xlab = "Year",ylab ="Consumption_MWh", main ="Hourly Consumption over Time")
+plot(daily_ts , xlab = "Year",ylab ="Consumption_MWh", main ="Daily mean Consumption over Time")
+plot(weekly_ts , xlab = "Year",ylab ="Consumption_MWh", main ="Weekly mean Consumption over Time")
+plot(monthly_ts , xlab = "Year",ylab ="Consumption_MWh", main ="Monthly mean Consumption over Time")
+
+```
+
+
+*Figure 1 : Figure of the data in different levels*
+
+It can be seen from these plots that at every unit of time, we observe strong seasonality. To see that dependence to seasonal component, we plot autocorrelation functions. 
+
+```{r, echo=FALSE , warning= FALSE , message= FALSE}
+par(mfrow=c(2,2))
+ggAcf(hourly_ts,lag.max = 200,main = "Autocorrelation of Hourly data")
+ggAcf(daily_ts,lag.max = 40,main = "Autocorrelation of Daily data")
+ggAcf(weekly_ts,lag.max = 100,main = "Autocorrelation of Weekly data")
+ggAcf(monthly_ts,lag.max = 24,main = "Autocorrelation of Monthly data")
+```
+
+*Figure 2 : Autocorrelation Plots of the data in different levels*
+
+
+It can be seen that Hourly data has the highest autocorrelation in every 24 hours. This shows a seasonality of a period of 24 hours. Also the hourly data has a strong correlation between the other hours especially the neighboring ones. At lag 168 (7*24) which represents the same hour of the same day of the week, has highest correlation.
+
+The Daily data shows the highest autocorrelation in every 7 days. This shows a seasonality of a period of 7 days. Also the neighboring days indicate correlation within.
+
+Weekly data autocorrelation graph pendulates between - and + like a sinusodial wave. There is a seasonal behaviour but the periods are not exactly equal and it is not as strong as the seasonality in hourly and daily data.
+
+It can be seen that Monthly data has a correlation in every 12 months. In other words there is a correlation between same months of years. This is another seasonality sign but it is not as strong as daily or hourly data.
+
+#### Decomposition of the time series in at different levels
+
+To see seasonality and trend we will decompose and plot our time series.
+
+```{r, include=FALSE}
+dec_hourly_ts <- decompose(hourly_ts,type = "multiplicative")
+dec_daily_ts <- decompose(daily_ts,type = "multiplicative")
+dec_weekly_ts <- decompose(weekly_ts,type = "multiplicative")
+dec_monthly_ts <- decompose(monthly_ts,type = "multiplicative")
+
+```
+
+
+
+```{r,echo=FALSE}
+autoplot(dec_hourly_ts,main="Decomposition of hourly data")
+```
+*Figure 3 : Decomposition Plots of the hourly data*
+
+
+```{r,echo=FALSE}
+autoplot(dec_daily_ts, main = "Decomposition of daily data")
+```
+*Figure 4 : Decomposition of the daily series*
+
+
+
+```{r,echo=FALSE}
+autoplot(dec_weekly_ts,main = "Decomposition of weekly data")
+```
+*Figure 5 : Decomposition of the weekly series*
+
+
+```{r,echo=FALSE}
+autoplot(dec_monthly_ts , main = "Decomposition of monthly data")
+```
+*Figure 6 : Decomposition of the monthly series*
+
+The decomposition of the series support the interpretations we made on Autocorrelation plots. Also it shows us there is a upward linear trend between years 2016 and 2018, but afterwards the trend becomes flatter. Also it's interesting to observe that the trend become downwards at the very last 2 observations which probably is caused by the reduced industrial production and consumption during CoViD-19 pandemics.
+
+We also notice that the remainder term in decompositions contain seasonal like behavior which is very apparent in weekly data.
+### Task 2
+#### Moving on with the hourly data 
+
+After noticing the most correlation occurs in period of 168 hours, I move on with the hourly time series data. First I will decompose it, detrend it and than deseasonalize it to have the random effect.
+```{r, echo= FALSE}
+dec_hourly_ts <- decompose(hourly_ts,type = "multiplicative")
+
+detrend_hourly_ts <- hourly_ts / dec_hourly_ts$trend
+
+plot (detrend_hourly_ts , main = "Hourly series with removed trend")
+```
+*Plot 7 : Plot of the detrended hourly data*
+
+```{r, echo= FALSE}
+deseasonalized_hourly_ts <-  hourly_ts /dec_hourly_ts$seasonal
+
+plot (deseasonalized_hourly_ts , main = "Hourly series with removed seasonality")
+```
+*Plot 8 : Plot of the deseasonalized hourly data*
+
+```{r, echo= FALSE}
+plot(dec_hourly_ts$random , main = "Hourly series with removed trend and seasonality")
+
+
+```
+*Plot 9 : Plot of the hourly data with removed trend and seasonality*
+
+
+#### Autocorrelation of the series with removed trend and seasonality
+```{r, echo=FALSE}
+dec_hourly_ts$trend[33468:37848] <- as.numeric(tail(na.omit(dec_hourly_ts$trend),1))
+random_hourly_ts <- (deseasonalized_hourly_ts / dec_hourly_ts$trend)
+ 
+
+ggAcf(random_hourly_ts,na.action = na.pass ,lag.max = 200)
+```
+*Plot 10 : Autocorrelation Plot of the hourly data with removed trend and seasonality*
+
+Where we consider hourly data only after detrending, we see persistent seasonal effect (Fig.8) which disappears to be random (Fig.9). However, acf plot (Fig.10) does not support it. It has high correlation values even for larger lags.
+There is still a high autocorrelation in the data. 
+
+
+### Task 3
+#### Application of Auto Regressive Model
+
+```{r,echo=FALSE}
+AIC_AR <- c()
+BIC_AR <- c()
+for ( i in 1:5){
+  AR_model <-  arima(random_hourly_ts, order=c(i,0,0))
+  #Akaike Information Criteria
+  AIC_AR <- c(AIC_AR,AIC(AR_model))
+
+  #Bayesian Information Criteria
+  BIC_AR <- c(BIC_AR,BIC(AR_model))  
+}
+```
+
+The code runs arima function which evaluates the Auto Regressive Model in different orders (1 to 5). 
+
+We will check the Akaike and Bayesian Information criteria
+```{r}
+#Akaike Information Criteria
+AIC_AR
+#Bayesian Information Criteria
+BIC_AR
+```
+
+The lowest AIC and BIC value seems to be at p = 5
+
+
+### Task 4
+#### Application of Moving Average Model
+
+```{r,echo=FALSE}
+AIC_MA <- c()
+BIC_MA <- c()
+for ( i in 1:5){
+  MA_model <-  arima(random_hourly_ts, order=c(0,0,i))
+  #Akaike Information Criteria
+  AIC_MA <- c(AIC_MA,AIC(MA_model))
+
+  #Bayesian Information Criteria
+  BIC_MA <- c(BIC_MA,BIC(MA_model))  
+}
+```
+
+The code runs arima function which evaluates the Moving Average Model in different orders (1 to 5). 
+
+We will check the Akaike and Bayesian Information criteria
+```{r}
+#Akaike Information Criteria
+AIC_MA
+#Bayesian Information Criteria
+BIC_MA
+```
+
+The lowest AIC and BIC value seems to be at q = 5
+
+
+
+The lowest AIC and BIC value of all models happens at AR model with order = 5, therefore we will use that model for our forecast.
+
+### Task 5
+#### Making Predictions
+
+We will make 24 hour prediction to the Resudial values of the hourly data, based on our AR model.
+
+```{r, echo=FALSE}
+random_hourly_ts <- na.omit(random_hourly_ts)
+trend_coeff <- as.numeric(tail(na.omit(dec_hourly_ts$trend),1))
+seasonal_coeff <-  dec_hourly_ts$seasonal[(37848-7*24+1):(37848-6*24)]
+  
+AR_model_hourly <- arima(random_hourly_ts, order = c(5,0,0))
+Data_model_fit <- random_hourly_ts-residuals(AR_model_hourly)
+
+hourly_forecast <- predict(AR_model_hourly, n.ahead = 24)$pred
+
+Forecasted_values <- hourly_forecast * trend_coeff * seasonal_coeff
+
+Forecasted_values <-  as.numeric(Forecasted_values)
+```
+Our forecast suggests, for the next 24 hours, the electricity consumption will be like as following: 
+```{r, echo=FALSE}
+print(Forecasted_values)
+```
+
+
+
+```{r, echo=FALSE}
+
+time_of_forecast <-  seq(as.POSIXct("2020-04-27 00:00:00"),as.POSIXct("2020-04-27 23:00:00"),by = "hour")
+
+
+
+filtered <- data.table(data_elec %>%
+  filter(year==2020) %>%
+  filter(month== 04))
+
+filtered[,"time_index" :=as.POSIXct(paste(Date,as.character(Time),sep = "/"), format = "%d.%m.%Y/%H:%M")
+]
+
+plot(filtered$time_index, as.numeric(filtered$Consumption_MWh) , type = "l",xlim = c(as.POSIXct("2020-04-01"),as.POSIXct("2020-04-30")) , xlab = "Time", ylab = "Consumption (MWh)" , main  = "Electricity Consumption in April")
+
+points(cbind(time_of_forecast,Forecasted_values), type = "l", col = 2)
+
+
+
+```
+*Figure 11: Electricity consumption in April (Forecast is shown with red line*
+
+### Bonus: Checking model success
+
+In this part we will test our forecast with the real values of the consumption in 27 April 2020.
+
+```{r}
+test_data <- fread("test_data.csv")
+names(test_data) <- c("Date", "Time" , "Consumption_MWh")
+
+
+test_data$Consumption_MWh <- as.character(test_data$Consumption_MWh)
+temp7 <- c()
+for(i in 1:length(test_data$Consumption_MWh)){
+  temp8 <- 1000*as.numeric(paste(unlist(strsplit(test_data$Consumption_MWh[i],",")),collapse = ""))
+  temp7 <- c(temp7,temp8)
+}
+test_data$Consumption_MWh <- temp7
+
+Real_life_consumption <- test_data$Consumption_MWh
+
+
+
+
+```
+Mean Absolute Percentage Error:
+```{r}
+mean(abs(Forecasted_values-Real_life_consumption)/Real_life_consumption)
+
+```
+
+Root Mean Square Error:
+
+```{r}
+
+mean((Forecasted_values-Real_life_consumption)^2)^0.5
+
+```
+When we consider MAPE and RMSE values, MAPE gives a better insight on the fit of the model. A MAPE value of 4.8% gives a good understanding of the fit compared to an rmse value of 1516.
+
+
+## References
+
+[R documentation](https://www.rdocumentation.org/)
+
+[EXIST - Transparency Platform](https://seffaflik.epias.com.tr/transparency/tuketim/gerceklesen-tuketim/gercek-zamanli-tuketim.xhtml) 
+
+1.[Trading Eceonomics (About Turkish electricity access)](https://tradingeconomics.com/turkey/access-to-electricity-percent-of-total-population-wb-data.html)
