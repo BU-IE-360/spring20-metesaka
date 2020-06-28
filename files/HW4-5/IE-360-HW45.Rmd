@@ -1,0 +1,472 @@
+---
+title: 'Building Forecast Models over Traffic Volume of I-94'
+author: "Umut Mete Saka"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+Interstate 94 is an east-west Interstate Highway connecting the Great Lakes and northern Great Plains regions of the United States. The highway passes through Minneapolis, Minnesota.[1] In our dataset I have hourly traffic volume of the part between Minneapolis and St. Paul of I-94 with attributes such as holiday information, temperature and detailed weather information form 2012 to 2018. 
+
+In this project I am going to find the the built ARIMA and regression models and find the best model via calculating Mean Absolue Error (MAE) values on the test data.
+
+## First Steps
+
+#### Loading Packages
+
+I use several packages in my study therefore I start with loading them. 
+These packages will be needed to analyze and visualize my data.
+
+
+```{r,message=FALSE }
+library(data.table)
+library(stats)
+library(dplyr)
+library(forecast)
+
+```
+
+#### Importing data as data. table
+
+I import the data with fread, easy and fast to import and convert .csv to data.table. After the import I check the structure of the data.
+```{r}
+traffic_data <- fread("Metro_Interstate_Traffic_Volume.csv")
+str(traffic_data)
+```
+*Table 1 : Structure of the dataset*
+
+
+#### Manipulating data in order to start our analysis
+
+I need to make some manipulations to make our time series analysis more conveniently. These are adding hour, month, day, year, weekday and week colunms and make conversion of the classes of columns.
+
+```{r}
+traffic_data[,c('date','time'):= tstrsplit(date_time," ") ]
+traffic_data[,c('year','month','day'):=tstrsplit(date,'-')]
+traffic_data[,c('hour','min','sec'):= tstrsplit(time,':')]
+traffic_data$min=NULL
+traffic_data$sec=NULL
+traffic_data$time=NULL
+traffic_data$date=NULL
+
+traffic_data$hour=as.numeric(traffic_data$hour)
+traffic_data$day=as.numeric(traffic_data$day)
+traffic_data$month=as.numeric(traffic_data$month)
+traffic_data$year=as.numeric(traffic_data$year)
+
+traffic_data[,weather_main:=as.factor(weather_main)]
+traffic_data[,weather_description:=as.factor(weather_description)]
+traffic_data[,holiday:=as.factor(holiday)]
+traffic_data[,date_time := as.Date(date_time, format = "%Y-%m-%d %H:%M:%S")]
+
+traffic_data[,weekday := weekdays(date_time)]
+traffic_data[,week := week(date_time)]
+
+```
+
+
+Now my data is ready to begin the analysis:
+```{r,echo=FALSE}
+str(traffic_data)
+```
+*Table 2 : Modified Structure of the dataset*
+
+
+
+## Dividing the data into Train and Test Data
+
+```{r}
+train_data_traffic <- traffic_data[as.numeric(format(date_time,"%Y")) <= 2017]
+test_data_traffic <- traffic_data[as.numeric(format(date_time,"%Y")) == 2018]
+
+```
+
+Consequently I will create 3 new datasets from the data. These will be the daily, weekly and monthly means of traffic volume. This step will help me during arima modelling
+
+```{r}
+traffic_data_daily <- train_data_traffic[,list(daily_mean = mean(traffic_volume)), by = list(year,month,day)]
+traffic_data_weekly <- train_data_traffic[,list(weekly_mean = mean(traffic_volume)), by = list(year,month,week)]
+traffic_data_monthly <- train_data_traffic[,list(monthly_mean = mean(traffic_volume)), by = list(year,month)]
+
+
+```
+
+
+## Linear Regression Analysis
+
+I will start with the linear regression model of the data. 
+
+```{r,include=F}
+
+train_data_traffic[,month:=as.factor(month)]
+train_data_traffic[,day:=as.factor(day)]
+train_data_traffic[,hour:=as.factor(hour)]
+train_data_traffic[,week:=as.factor(week)]
+
+```
+
+*The Summary function which shows the coefficients and the significance of the attributes is too large therefore I cannot show in the report. I will explain the steps and the required code is in the code file*
+
+##### Initial Model
+
+In my initial model I use every meaningful attribute to see their effects on the model. 
+
+```{r}
+model1 <-  lm(traffic_volume~.-date_time,train_data_traffic)
+```
+
+The attributes temperature, cloud percentage, weather conditions, weekday, hours has a high significance on the linear model. So we will keep these and one eliminate the least effective ones one by one.
+
+
+In the second model, I eliminate insignificant attribute "holiday" from the model.
+In the third model, I eliminate insignificant attribute "rain_1h" from the model.
+In the fourth model, I eliminate insignificant attribute "month" from the model.
+In the fifth model, I eliminate insignificant attribute "year" from the model.
+
+
+When I check the weather_main and weather_description attributes, only a few situations effect the traffic, so I will create dummy varibles on these specific situation and eliminate the weahter_main attribute.
+
+These weather conditions are rain, mist, snow and clouds.
+
+```{r,echo=F}
+train_data_traffic[,is_Rainy := {
+  if(weather_main == "Rain")1
+  else 0
+  },by=weather_main]
+train_data_traffic[,is_Snow := {
+  if(weather_main == "Snow")1
+  else 0
+},by=weather_main]
+train_data_traffic[,is_Mist := {
+  if(weather_main == "Mist")1
+  else 0
+},by=weather_main]
+train_data_traffic[,is_Cloudy := {
+  if(weather_main == "Clouds")1
+  else 0
+},by=weather_main]
+
+
+train_data_traffic[,is_Rainy:=as.factor(is_Rainy)]
+train_data_traffic[,is_Snow:=as.factor(is_Snow)]
+train_data_traffic[,is_Mist:=as.factor(is_Mist)]
+train_data_traffic[,is_Cloudy:=as.factor(is_Cloudy)]
+
+```
+
+In the sixth model, I eliminate the "weather_main" and "weather_description" attributes and add the new weather attributes.
+
+In the seventh model, I eliminate the insignificant attribute "day" from the model.
+In the eighth model, I eliminate the insignificant attribute "snow1_h" from the model.
+In the nineth model, I eliminate the insignificant attribute "is_Mist" from the model.
+In the tenth model, I eliminate the insignificant attribute "is_Rainy" from the model.
+
+
+
+Now I will add lagged columns to see that whether there is an effect of previous hours on the current traffic volume. I will chose lag 2, 12 and 24. The reason of these numbers is 2 is a close time interval which can make me able to see the effect of a close interval, 12 is represent opposite behaviors of cars like going and coming back to work and 24 to see the effect of the same hour of the previous day.
+
+```{r}
+train_data_traffic[,lag2:= shift(traffic_volume,2)]
+train_data_traffic[,lag12:= shift(traffic_volume,12)]
+train_data_traffic[,lag24:= shift(traffic_volume,24)]
+
+```
+
+
+##### Eleventh Model
+
+I add the new attributes, lag2, lag12, lag24.
+
+
+```{r,echo=FALSE}
+model11 <-  lm(traffic_volume~.-date_time-holiday-rain_1h-year-month-weather_main-week-weather_description-day-snow_1h-is_Mist-is_Rainy,train_data_traffic)
+```
+Coefficients and the R square value of the model
+```{r,echo=FALSE}
+summary(model11)
+```
+Akaike Information Criteria of the model
+```{r,echo=FALSE}
+AIC(model11)
+```
+
+AIC value is reduced and r^2 value has increased. There is no insignificant attributes. R^2 value is satisfactory.
+
+Therefore, I will move on with this model. 
+
+
+## ARIMA model of the data
+
+In order to move on with the ARIMA model I will determine and decompose the seasonality and trend components. 
+
+I will start with seeing the auto-correlation function
+
+```{r,echo=F }
+acf(train_data_traffic$traffic_volume,200, main = "Auto-Correlation Graph of Traffic Volume")
+
+```
+*Graph 1: Auto-Correlation of Traffic Volume*
+
+It can be seen that at every 12 hour there is a significant negative correlation. At every 24 hour there is a significicant positive correlation. At lag = 168 (same hour of the same week 7*24) There is slightly higher correlation.
+
+Also the volume is highly correlated with the neighboring hours. 
+
+Now I am going to see the Auto-correlation functions of the daily, weekly and monthly mean data to point different possible seasonality components.
+
+
+```{r,echo=F }
+acf(traffic_data_daily$daily_mean,200, main = "Auto-Correlation Graph of Traffic Volume")
+
+```
+*Graph 2: Auto-Correlation of daily mean of Traffic Volume*
+
+
+At lag 7 there is a high correlation which corresponds to same day of the previous week. Also neighboring days have correlation too.
+
+```{r,echo=F }
+acf(traffic_data_weekly$weekly_mean,200, main = "Auto-Correlation Graph of Traffic Volume")
+
+```
+*Graph 3: Auto-Correlation of weekly mean of Traffic Volume*
+
+There is no significant correlation.
+
+```{r,echo=F }
+acf(traffic_data_monthly$monthly_mean,200, main = "Auto-Correlation Graph of Traffic Volume")
+
+```
+*Graph 4: Auto-Correlation of monthly mean of Traffic Volume*
+
+There is no significant correlation. 
+
+
+## Decomposing seasonality
+
+I will detect the effect of hour and day on the traffic volume and create a coefficient by dividing the daily and hourly mean to the total mean.
+
+```{r,include=F}
+hourly_coefficient <- train_data_traffic[,list(hour_mean = mean(traffic_volume)), by = list(hour)]
+mean_hour <- mean(hourly_coefficient$hour_mean)
+hourly_coefficient[,total_mean := mean_hour]
+hourly_coefficient[,coefficient := hour_mean/total_mean]
+
+weekday_coefficient <- train_data_traffic[,list(weekday_mean = mean(traffic_volume)), by = list(weekday)]
+mean_weekday <- mean(weekday_coefficient$weekday_mean)
+weekday_coefficient[,total_mean := mean_weekday]
+weekday_coefficient[,coefficient := weekday_mean/total_mean]
+
+train_data_traffic[,hour_coefficient := {
+  if(hour == 9) hourly_coefficient$coefficient[1]
+  else if(hour == 10) hourly_coefficient$coefficient[2]
+  else if(hour == 11) hourly_coefficient$coefficient[3]
+  else if(hour == 12) hourly_coefficient$coefficient[4]
+  else if(hour == 13) hourly_coefficient$coefficient[5]
+  else if(hour == 14) hourly_coefficient$coefficient[6]
+  else if(hour == 15) hourly_coefficient$coefficient[7]
+  else if(hour == 16) hourly_coefficient$coefficient[8]
+  else if(hour == 17) hourly_coefficient$coefficient[9]
+  else if(hour == 18) hourly_coefficient$coefficient[10]
+  else if(hour == 19) hourly_coefficient$coefficient[11]
+  else if(hour == 20) hourly_coefficient$coefficient[12]
+  else if(hour == 21) hourly_coefficient$coefficient[13]
+  else if(hour == 22) hourly_coefficient$coefficient[14]
+  else if(hour == 23) hourly_coefficient$coefficient[15]
+  else if(hour == 00) hourly_coefficient$coefficient[16]
+  else if(hour == 1) hourly_coefficient$coefficient[17]
+  else if(hour == 2) hourly_coefficient$coefficient[18]
+  else if(hour == 3) hourly_coefficient$coefficient[19]
+  else if(hour == 4) hourly_coefficient$coefficient[20]
+  else if(hour == 5) hourly_coefficient$coefficient[21]
+  else if(hour == 6) hourly_coefficient$coefficient[22]
+  else if(hour == 7) hourly_coefficient$coefficient[23]
+  else if(hour == 8) hourly_coefficient$coefficient[24]
+}
+   , by = hour]
+
+train_data_traffic[,weekday_coefficients := {
+  if(weekday == "Salı") weekday_coefficient$coefficient[1]
+  else if(weekday == "Çarşamba")  weekday_coefficient$coefficient[2]
+  else if(weekday == "Perşembe")  weekday_coefficient$coefficient[3]
+  else if(weekday == "Cuma")      weekday_coefficient$coefficient[4]
+  else if(weekday == "Cumartesi") weekday_coefficient$coefficient[5]
+  else if(weekday == "Pazar")     weekday_coefficient$coefficient[6]
+  else if(weekday == "Pazartesi") weekday_coefficient$coefficient[7]
+  
+  
+}
+   , by = weekday]
+
+train_data_traffic[,deseasonalized := traffic_volume/weekday_coefficients/hour_coefficient]
+
+```
+ 
+After I have deseasonalized traffic volume data, I will check its acf.
+
+```{r,echo =F}
+acf(train_data_traffic$deseasonalized,200)
+```
+*Graph 5: Auto-Correlation of deseasonalized Traffic Volume*
+
+The seasonality seems to disappear. 
+
+Now applications of various arima models to dataset, I decide to move on with arima(3,1,3) and arima(5,1,0) which was found by the automated function, auto.arima.
+
+```{r,echo = FALSE}
+
+
+model_arima1 <- arima(train_data_traffic$deseasonalized, c(3,1,3))
+checkresiduals(model_arima1)
+```
+*Graph 6: Auto-Correlation and plot of the residuals of arima model1*
+
+Akaike Information Criteria of the Model
+```{r,echo = FALSE}
+AIC(model_arima1)
+```
+
+```{r,echo = FALSE}
+model_arima2 <- auto.arima(train_data_traffic$deseasonalized)
+checkresiduals(model_arima2)
+```
+*Graph 6: Auto-Correlation and plot of the residuals of arima model2*
+
+Akaike Information Criteria of the Model
+
+```{r,echo = FALSE}
+
+AIC(model_arima2)
+
+```
+
+## Validation of the models
+
+Now I will run the models and make forecasts to year 2018. Then I am going to calculate the MAE values between the predictions and the test data to compare between the sets.
+
+```{r,include=F}
+
+test_data_traffic[,hour_coefficient := {
+  if(hour == 9) hourly_coefficient$coefficient[1]
+  else if(hour == 10) hourly_coefficient$coefficient[2]
+  else if(hour == 11) hourly_coefficient$coefficient[3]
+  else if(hour == 12) hourly_coefficient$coefficient[4]
+  else if(hour == 13) hourly_coefficient$coefficient[5]
+  else if(hour == 14) hourly_coefficient$coefficient[6]
+  else if(hour == 15) hourly_coefficient$coefficient[7]
+  else if(hour == 16) hourly_coefficient$coefficient[8]
+  else if(hour == 17) hourly_coefficient$coefficient[9]
+  else if(hour == 18) hourly_coefficient$coefficient[10]
+  else if(hour == 19) hourly_coefficient$coefficient[11]
+  else if(hour == 20) hourly_coefficient$coefficient[12]
+  else if(hour == 21) hourly_coefficient$coefficient[13]
+  else if(hour == 22) hourly_coefficient$coefficient[14]
+  else if(hour == 23) hourly_coefficient$coefficient[15]
+  else if(hour == 00) hourly_coefficient$coefficient[16]
+  else if(hour == 1) hourly_coefficient$coefficient[17]
+  else if(hour == 2) hourly_coefficient$coefficient[18]
+  else if(hour == 3) hourly_coefficient$coefficient[19]
+  else if(hour == 4) hourly_coefficient$coefficient[20]
+  else if(hour == 5) hourly_coefficient$coefficient[21]
+  else if(hour == 6) hourly_coefficient$coefficient[22]
+  else if(hour == 7) hourly_coefficient$coefficient[23]
+  else if(hour == 8) hourly_coefficient$coefficient[24]
+}
+   , by = hour]
+
+test_data_traffic[,weekday_coefficients := {
+  if(weekday == "Salı") weekday_coefficient$coefficient[1]
+  else if(weekday == "Çarşamba")  weekday_coefficient$coefficient[2]
+  else if(weekday == "Perşembe")  weekday_coefficient$coefficient[3]
+  else if(weekday == "Cuma")      weekday_coefficient$coefficient[4]
+  else if(weekday == "Cumartesi") weekday_coefficient$coefficient[5]
+  else if(weekday == "Pazar")     weekday_coefficient$coefficient[6]
+  else if(weekday == "Pazartesi") weekday_coefficient$coefficient[7]
+  
+  
+}
+   , by = weekday]
+
+
+test_data_traffic[,is_Rainy := {
+  if(weather_main == "Rain")1
+  else 0
+  },by=weather_main]
+test_data_traffic[,is_Snow := {
+  if(weather_main == "Snow")1
+  else 0
+},by=weather_main]
+test_data_traffic[,is_Mist := {
+  if(weather_main == "Mist")1
+  else 0
+},by=weather_main]
+test_data_traffic[,is_Cloudy := {
+  if(weather_main == "Clouds")1
+  else 0
+},by=weather_main]
+
+
+test_data_traffic[,is_Rainy:=as.factor(is_Rainy)]
+test_data_traffic[,is_Snow:=as.factor(is_Snow)]
+test_data_traffic[,is_Mist:=as.factor(is_Mist)]
+test_data_traffic[,is_Cloudy:=as.factor(is_Cloudy)]
+
+test_data_traffic[,month:=as.factor(month)]
+test_data_traffic[,day:=as.factor(day)]
+test_data_traffic[,hour:=as.factor(hour)]
+test_data_traffic[,week:=as.factor(week)]
+
+test_data_traffic[,lag2:= shift(traffic_volume,2)]
+test_data_traffic[,lag12:= shift(traffic_volume,12)]
+test_data_traffic[,lag24:= shift(traffic_volume,24)]
+
+
+
+```
+
+```{r}
+Lm_predictions <-  predict(model11, test_data_traffic)
+arima_predictions1 <- forecast(model_arima1,7949)
+arima_predictions2 <- forecast(model_arima2,7949)
+
+test_data_traffic[,"LM_model":=Lm_predictions*hour_coefficient*weekday_coefficients]
+test_data_traffic[,"arima_model1":=arima_predictions1$mean*hour_coefficient*weekday_coefficients]
+test_data_traffic[,"arima_model2":=arima_predictions2$mean*hour_coefficient*weekday_coefficients]
+
+MAE_lm <- mean(abs(test_data_traffic$traffic_volume-test_data_traffic$LM_model),na.rm=T)
+MAE_arima1 <- mean(abs(test_data_traffic$traffic_volume-test_data_traffic$arima_model1),na.rm=T)
+MAE_arima2 <- mean(abs(test_data_traffic$traffic_volume-test_data_traffic$arima_model2),na.rm=T)
+
+
+
+```
+
+Mean Absolute Error of Linear model :
+```{r,echo=F}
+MAE_lm
+```
+
+Mean Absolute Error of Arima Model 1 :
+```{r,echo=F}
+MAE_arima1
+```
+Mean Absolute Error of Arima Model 2 :
+```{r,echo=F}
+MAE_arima2
+```
+
+
+Considering these three results, Linear Regression model and Arima model2 shows similiar performance. However Arima Model 1 shows significantly better result. 
+
+Therefore the ARIMA model with AR order 3, degree of differencing 1 and MA order 3 shows the best result.
+
+
+
+## References
+1. [Interstate 94, Wikipedia](https://en.wikipedia.org/wiki/Interstate_94)
+2. [R Documentation](https://www.rdocumentation.org/)
