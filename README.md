@@ -12,3 +12,6 @@ Welcome to my GitHub repository.
 
 #### [Shortcut to my Homework 4-5](https://bu-ie-360.github.io/spring20-metesaka/files/HW4-5/IE-360-HW45.html)
 ##### [R code](https://bu-ie-360.github.io/spring20-metesaka/files/HW4-5/HW4-5.R)
+
+#### [Shortcut to our group Project (Group 18)](https://bu-ie-360.github.io/spring20-metesaka/files/Project/Project-_Report.html)
+##### [R code](https://bu-ie-360.github.io/spring20-metesaka/files/Project/IE360-Proj_code.R)
